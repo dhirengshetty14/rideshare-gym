@@ -1,0 +1,27 @@
+services:
+  rideshare-mock:
+    build:
+      context: .
+      dockerfile: docker/rideshare-mock/Dockerfile
+    image: rideshare-gym/mock:dev
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as r; r.urlopen('http://localhost:8000/health').read()"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host", "0.0.0.0", "-config", "/config/toxiproxy.json"]
+    ports:
+      - "8474:8474"
+      - "8001:8001"
+    volumes:
+      - ./docker/toxiproxy:/config:ro
+    depends_on:
+      rideshare-mock:
+        condition: service_healthy
