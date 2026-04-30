@@ -80,13 +80,8 @@ def list_idle_drivers(
     }
 
 
-@router.post("/match")
-def match_ride(
-    request: Request,
-    trip_id: int = Body(...),
-    driver_id: int = Body(...),
-) -> dict[str, Any]:
-    w = get_world(get_tenant_id(request))
+def _do_match(w, trip_id: int, driver_id: int) -> dict[str, Any]:
+    """Internal helper — pure mutation, no HTTP/Body dependencies."""
     trip = w.trips.get(trip_id)
     driver = w.drivers.get(driver_id)
     if trip is None:
@@ -102,7 +97,6 @@ def match_ride(
     if "frozen" in driver.flags:
         raise HTTPException(status_code=422, detail="driver_frozen")
 
-    # Compute alternatives count for the dispatch_log.
     n_alt = sum(
         1 for d in w.drivers.values()
         if d.status == DriverStatus.IDLE and d.id != driver_id
@@ -125,6 +119,15 @@ def match_ride(
         alternatives_considered=n_alt,
     ))
     return {"trip": _trip_dict(trip), "eta_minutes": eta}
+
+
+@router.post("/match")
+def match_ride(
+    request: Request,
+    trip_id: int = Body(...),
+    driver_id: int = Body(...),
+) -> dict[str, Any]:
+    return _do_match(get_world(get_tenant_id(request)), trip_id, driver_id)
 
 
 @router.post("/cancel_trip")
@@ -158,7 +161,7 @@ def cancel_trip(
 @router.post("/auto_match_nearest")
 def auto_match_nearest(
     request: Request,
-    trip_id: int = Body(...),
+    trip_id: int = Body(..., embed=True),
 ) -> dict[str, Any]:
     """Convenience: pick the nearest idle driver and match. Useful for the
     realtime task agent if it doesn't want to enumerate manually."""
@@ -170,7 +173,7 @@ def auto_match_nearest(
         w.city, w.drivers, trip.pickup, vehicle_type=trip.vehicle_type)
     if driver is None:
         raise HTTPException(status_code=409, detail="no_idle_drivers")
-    return match_ride(request, trip_id=trip_id, driver_id=driver.id)
+    return _do_match(w, trip_id=trip_id, driver_id=driver.id)
 
 
 @router.post("/set_surge")

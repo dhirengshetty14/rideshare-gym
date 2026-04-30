@@ -36,7 +36,7 @@ def get_rider(request: Request, rider_id: int) -> dict[str, Any]:
 def freeze_rider(
     request: Request,
     rider_id: int,
-    reason: str = Body(...),
+    reason: str = Body(..., embed=True),
 ) -> dict[str, Any]:
     w = get_world(get_tenant_id(request))
     r = w.riders.get(rider_id)
@@ -55,7 +55,7 @@ def freeze_rider(
 def restore_rider(
     request: Request,
     rider_id: int,
-    reason: str = Body(default=""),
+    reason: str = Body(default="", embed=True),
 ) -> dict[str, Any]:
     w = get_world(get_tenant_id(request))
     r = w.riders.get(rider_id)
