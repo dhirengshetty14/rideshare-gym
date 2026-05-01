@@ -1,0 +1,1 @@
+"""Trajectory → training data converters."""
