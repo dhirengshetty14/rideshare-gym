@@ -80,9 +80,16 @@ class ClaudeBaselineAgent:
         )
         rec.set_initial(info["initial_state_hash"])
 
+        initial_user = obs.to_agent_message()
         messages: list[dict[str, Any]] = [
-            {"role": "user", "content": obs.to_agent_message()}
+            {"role": "user", "content": initial_user}
         ]
+        # Capture episode-level context for SFT/DPO data extraction.
+        rec.set_episode_context(
+            system_prompt=system[0]["text"] if system and isinstance(system, list) else None,
+            tools_serialized=tools,
+            initial_user_message=initial_user,
+        )
 
         success = False
         error_category: str | None = None
@@ -125,18 +132,6 @@ class ClaudeBaselineAgent:
                 tool_use_id=tool_use.id,
             )
             obs, reward, terminated, truncated, env_info = env.step(call)
-            rec.record(
-                action=call, observation=obs, reward=reward,
-                terminated=terminated, truncated=truncated,
-                latency_ms=env_info.get("tool_latency_ms", 0.0),
-                info=env_info,
-                tokens_in=usage_in, tokens_out=usage_out,
-            )
-            if on_step:
-                on_step(step, call, obs, reward, terminated, env_info)
-            if self.verbose:
-                print(f"[step {step}] {call.name}({_truncate_for_log(call.arguments, 200)}) "
-                      f"→ reward={reward:.3f} term={terminated} ok={env_info['tool_ok']}")
 
             tool_result_block = {
                 "type": "tool_result",
@@ -148,6 +143,21 @@ class ClaudeBaselineAgent:
                     "tool_error": env_info.get("tool_error"),
                 }, default=str),
             }
+            rec.record(
+                action=call, observation=obs, reward=reward,
+                terminated=terminated, truncated=truncated,
+                latency_ms=env_info.get("tool_latency_ms", 0.0),
+                info=env_info,
+                tokens_in=usage_in, tokens_out=usage_out,
+                assistant_message={"role": "assistant", "content": assistant_blocks},
+                tool_result_message={"role": "user", "content": [tool_result_block]},
+            )
+            if on_step:
+                on_step(step, call, obs, reward, terminated, env_info)
+            if self.verbose:
+                print(f"[step {step}] {call.name}({_truncate_for_log(call.arguments, 200)}) "
+                      f"→ reward={reward:.3f} term={terminated} ok={env_info['tool_ok']}")
+
             messages.append({"role": "user", "content": [tool_result_block]})
 
             if terminated:

@@ -35,6 +35,18 @@ class Step(BaseModel):
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+    # === SFT / DPO data capture (populated by LLM-driven agents only) === #
+    assistant_message: dict[str, Any] | None = None
+    """The full assistant turn the model emitted at this step:
+        {"role": "assistant", "content": "...", "tool_calls": [...]}
+    Captured by the agent runner. Populated for litellm / claude_baseline /
+    trained_local; None for gold_oracle. Used to reconstruct (input, target)
+    pairs for supervised fine-tuning."""
+    tool_result_message: dict[str, Any] | None = None
+    """The tool-result message we sent BACK to the model after env.step.
+    Shape: {"role": "tool", "tool_call_id": "...", "content": "..."}
+    Combined with `assistant_message` lets SFT walk the conversation.
+    None for gold_oracle."""
 
 
 class Trajectory(BaseModel):
@@ -59,6 +71,15 @@ class Trajectory(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     finished_at: str | None = None
+    # === SFT / DPO data capture (constant per episode) === #
+    system_prompt: str | None = None
+    """The system prompt the LLM saw. None for gold_oracle."""
+    tools_serialized: list[dict[str, Any]] | None = None
+    """JSON-Schema tool definitions exposed to the LLM (Anthropic-shape).
+    Combined with system_prompt + step assistant/tool messages gives the
+    full conversation log."""
+    initial_user_message: str | None = None
+    """The first user-role message (goal prompt + initial state observation)."""
 
     def to_jsonl(self) -> str:
         return self.model_dump_json() + "\n"
@@ -104,6 +125,8 @@ class TrajectoryRecorder:
         info: dict[str, Any] | None = None,
         tokens_in: int | None = None,
         tokens_out: int | None = None,
+        assistant_message: dict[str, Any] | None = None,
+        tool_result_message: dict[str, Any] | None = None,
     ) -> Step:
         step = Step(
             index=self._step_idx,
@@ -116,10 +139,28 @@ class TrajectoryRecorder:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             info=info or {},
+            assistant_message=assistant_message,
+            tool_result_message=tool_result_message,
         )
         self._traj.steps.append(step)
         self._step_idx += 1
         return step
+
+    def set_episode_context(
+        self,
+        *,
+        system_prompt: str | None = None,
+        tools_serialized: list[dict[str, Any]] | None = None,
+        initial_user_message: str | None = None,
+    ) -> None:
+        """Captured once per episode by the LLM-driven agent runner.
+        Required for SFT / DPO data extraction; ignored for gold_oracle."""
+        if system_prompt is not None:
+            self._traj.system_prompt = system_prompt
+        if tools_serialized is not None:
+            self._traj.tools_serialized = tools_serialized
+        if initial_user_message is not None:
+            self._traj.initial_user_message = initial_user_message
 
     def finalize(
         self,

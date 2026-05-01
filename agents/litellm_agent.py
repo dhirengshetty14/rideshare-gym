@@ -114,10 +114,17 @@ class LiteLLMAgent:
 
         system = load_prompt(self.prompt_name)
         tools = env.tool_registry.to_openai()
+        initial_user = obs.to_agent_message()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": obs.to_agent_message()},
+            {"role": "user", "content": initial_user},
         ]
+        # Capture episode-level context for SFT/DPO data extraction.
+        rec.set_episode_context(
+            system_prompt=system,
+            tools_serialized=env.tool_registry.to_anthropic(),
+            initial_user_message=initial_user,
+        )
 
         success = False
         error_category: str | None = None
@@ -200,26 +207,29 @@ class LiteLLMAgent:
                     name=tc.function.name, arguments=args, tool_use_id=tc.id,
                 )
                 obs, reward, terminated, truncated, env_info = env.step(call)
-                rec.record(
-                    action=call, observation=obs, reward=reward,
-                    terminated=terminated, truncated=truncated,
-                    latency_ms=env_info.get("tool_latency_ms", 0.0),
-                    info=env_info,
-                    tokens_in=usage_in, tokens_out=usage_out,
-                )
-                if on_step:
-                    on_step(step, call, obs, reward, terminated, env_info)
 
                 tool_message_content = json.dumps({
                     "text": obs.text[:500],
                     "data": obs.data,
                     "tool_error": env_info.get("tool_error"),
                 }, default=str)
-                messages.append({
+                tool_result_msg = {
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": tool_message_content,
-                })
+                }
+                rec.record(
+                    action=call, observation=obs, reward=reward,
+                    terminated=terminated, truncated=truncated,
+                    latency_ms=env_info.get("tool_latency_ms", 0.0),
+                    info=env_info,
+                    tokens_in=usage_in, tokens_out=usage_out,
+                    assistant_message=assistant_record,
+                    tool_result_message=tool_result_msg,
+                )
+                if on_step:
+                    on_step(step, call, obs, reward, terminated, env_info)
+                messages.append(tool_result_msg)
 
                 if self.verbose:
                     print(
