@@ -84,6 +84,10 @@ def _build_agent(
     base_url: str | None,
     verbose: bool,
     litellm_tags: list[str] | None,
+    checkpoint: str | None = None,
+    base_model: str | None = None,
+    temperature: float | None = None,
+    load_in_4bit: bool = False,
 ):
     if agent_name == "gold_oracle":
         from agents.gold_oracle import GoldOracleAgent
@@ -104,6 +108,18 @@ def _build_agent(
         if litellm_tags:
             kwargs["litellm_tags"] = litellm_tags
         return LiteLLMAgent(**kwargs)
+    if agent_name == "trained_local":
+        from agents.trained_local import DEFAULT_BASE_MODEL, TrainedLocalAgent
+        if checkpoint is None:
+            raise SystemExit("--checkpoint required for trained_local agent")
+        return TrainedLocalAgent(
+            checkpoint_path=checkpoint,
+            base_model=base_model or DEFAULT_BASE_MODEL,
+            temperature=temperature if temperature is not None else 0.7,
+            do_sample=True,
+            load_in_4bit=load_in_4bit,
+            verbose=verbose,
+        )
     raise SystemExit(f"unknown agent: {agent_name!r}")
 
 
@@ -129,7 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tasks", required=True,
                      help="Comma-separated task ids or glob patterns (e.g. 'rideshare/*').")
     ap.add_argument("--agent", default="gold_oracle",
-                     choices=["gold_oracle", "claude_baseline", "litellm"])
+                     choices=["gold_oracle", "claude_baseline", "litellm",
+                              "trained_local"])
     ap.add_argument("--model", default=None,
                      help="Model id. claude_baseline: claude-opus-4-7. "
                           "litellm: openai/gpt-4o, openai/gpt-5, "
@@ -139,6 +156,15 @@ def main(argv: list[str] | None = None) -> int:
                           "(litellm agent only; default https://llm-west.ncsu-las.net/v1).")
     ap.add_argument("--litellm-tags", default=None,
                      help="Comma-separated tags sent via x-litellm-tags header.")
+    ap.add_argument("--checkpoint", default=None,
+                     help="Path or HF id of trained model (trained_local agent only).")
+    ap.add_argument("--base-model", default=None,
+                     help="Tokenizer source for trained_local; default Qwen/Qwen2.5-7B-Instruct.")
+    ap.add_argument("--temperature", type=float, default=None,
+                     help="Sampling temperature (trained_local only). Use 0.0 for deterministic eval, "
+                          "0.7+ for diversified rollout collection.")
+    ap.add_argument("--load-in-4bit", action="store_true",
+                     help="QLoRA-style 4-bit inference for trained_local; saves GPU memory.")
     ap.add_argument("--n-episodes", type=int, default=3)
     ap.add_argument("--parallel", type=int, default=1)
     ap.add_argument("--seed", type=int, default=0)
@@ -157,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
     agent = _build_agent(
         args.agent, model=args.model, base_url=args.base_url,
         verbose=args.verbose, litellm_tags=tags,
+        checkpoint=args.checkpoint, base_model=args.base_model,
+        temperature=args.temperature, load_in_4bit=args.load_in_4bit,
     )
 
     if args.mock_base_url:
