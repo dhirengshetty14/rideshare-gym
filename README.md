@@ -1,8 +1,10 @@
 # Rideshare Ops RL Gym
 
-A real-time benchmark for **AI agents that run a ride-sharing platform** like Uber or Lyft. The agent plays the platform's brain: matching riders to drivers, setting surge pricing during demand spikes, recovering lost items, refunding chargeback disputes, catching coordinated fraud rings, escalating safety incidents, and rebalancing the fleet for predicted events. The gym scores every action automatically and produces training data for the next agent.
+A real-time **benchmark + training environment** for AI agents that run a ride-sharing platform like Uber or Lyft. The agent plays the platform's brain: matching riders to drivers, setting surge pricing during demand spikes, recovering lost items, refunding chargeback disputes, catching coordinated fraud rings, escalating safety incidents, and rebalancing the fleet for predicted events. The gym scores every action automatically AND ships a complete training pipeline (SFT → DPO → GRPO with verifiable rewards) that turns a base LLM into a measurably-better one on the same tasks.
 
 > **No real customer data, no real Uber backend, no real money.** Everything is synthetic and reproducible by seed. The shapes mirror real ride-sharing platforms; the fraud patterns and operational flows are the actual ones used in production systems.
+
+> **Both an eval harness and a training factory.** The same verifiers that *score* an agent's performance are reused as the *reward signal* during RL training. Run baseline → SFT → DPO → GRPO and watch the same model improve on the same tasks. See [Training pipeline](#training-pipeline) below.
 
 ---
 
@@ -17,13 +19,13 @@ A real-time benchmark for **AI agents that run a ride-sharing platform** like Ub
 7. [Inputs and outputs at every level](#inputs-and-outputs-at-every-level)
 8. [What data is in the gym](#what-data-is-in-the-gym)
 9. [Adversarial mode](#adversarial-mode)
-10. [Quick start](#quick-start)
-11. [The Streamlit UI](#the-streamlit-ui)
-12. [Project layout](#project-layout)
-13. [Architecture diagram](#architecture-diagram)
-14. [Running real LLMs](#running-real-llms)
-15. [Sample scorecards](#sample-scorecards)
-16. [How this could be used to actually train a model](#how-this-could-be-used-to-actually-train-a-model)
+10. **[Training pipeline — improving a model with the gym](#training-pipeline)**
+11. [Quick start](#quick-start)
+12. [The Streamlit UI](#the-streamlit-ui)
+13. [Project layout](#project-layout)
+14. [Architecture diagram](#architecture-diagram)
+15. [Running real LLMs](#running-real-llms)
+16. [Sample scorecards](#sample-scorecards)
 17. [What's not built (post-MVP)](#whats-not-built-post-mvp)
 
 ---
@@ -362,6 +364,114 @@ Each perturbation is **seeded** for reproducibility. The success-rate gap betwee
 
 ---
 
+## Training pipeline
+
+This is what turns the gym from a benchmark into a model-improvement factory. Same gym, same verifiers, same tasks — but now we use them to **improve a base LLM**, not just measure one.
+
+### The pipeline in one picture
+
+```
+                    ┌─────────────────────┐
+                    │  Baseline model     │      Qwen2.5-7B-Instruct
+                    │  (untrained)        │      ~30-50% success
+                    └──────────┬──────────┘
+                               │
+                  collect rollouts (temperature=0.7)
+                               │
+                    ┌──────────▼──────────┐
+                    │ ~600 trajectories   │      mix of success + fail
+                    └──────────┬──────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            ▼                  ▼                  ▼
+      SFT examples       DPO pairs         GRPO prompts
+   (only successes)   (success vs fail)   (just (task, seed))
+            │                  │                  │
+            ▼                  ▼                  ▼
+     ┌─────────────┐   ┌─────────────┐   ┌─────────────────────┐
+     │  Recipe 1   │──▶│  Recipe 2   │──▶│      Recipe 3       │
+     │     SFT     │   │    DPO      │   │       GRPO          │
+     │ (3-6 hours) │   │ (4-8 hours) │   │   (24-48 hours)     │
+     │             │   │             │   │  rewards live       │
+     │             │   │             │   │  from gym verifier  │
+     └──────┬──────┘   └──────┬──────┘   └──────────┬──────────┘
+            ▼                  ▼                    ▼
+       ~50-65%             ~55-70%             ~60-75% success
+                                                    │
+                                                    ▼
+                                       analysis/training_curves.png
+```
+
+### Three escalating training recipes
+
+| Recipe | What it does | Cost | Why use it |
+|---|---|---|---|
+| **1. Rejection-sampling SFT** | Run baseline on the gym, keep only successful trajectories, fine-tune | ~3-6h on 1× A100 | Cheapest, biggest first gain (60-80% of total improvement) |
+| **2. DPO (preference)** | Pair successes vs failures from the same seed, train the model to prefer the success action | ~4-8h on 1× A100 | Captures *why* one trajectory beat another |
+| **3. GRPO with verifiable rewards** | Generate N rollouts per task, score with the gym verifier, group-relative policy gradient | ~24-48h on 2× A100 | State of the art (DeepSeek-R1 / Tülu 3 RLVR recipe) |
+
+### The conceptual core: verifier-as-reward
+
+The gym verifier — the same code that decides whether a chargeback was correctly handled or a fraud ring was caught — is **literally the reward signal during training**. From `training/reward.py`:
+
+```python
+def gym_step_reward(*, task_id, seed, completion):
+    """Spin up a fresh gym episode, parse the model's completion as a tool call,
+    step the env once, return the verifier's scalar reward."""
+```
+
+This is the [RLVR pattern](https://arxiv.org/abs/2411.15124) Allen AI uses for Tülu 3 and HuggingFace uses in [open-r1](https://github.com/huggingface/open-r1). No learned reward model. No human labelling. Just verifiable rewards from the simulator.
+
+### Failure mining (the "show me where the model fails" piece)
+
+`training/data/failure_miner.py` clusters failed trajectories by `(task, error_category, last_tool, first_failed_assertion)`. The output answers concrete questions like:
+
+> "Baseline forgets to call `send_to_driver` after `adjust_driver_payout` in 60% of M4 episodes. After SFT it's down to 8%."
+
+Run the dashboard to inspect failures live:
+
+```bash
+streamlit run analysis/failure_dashboard.py -- --traj-dir runs/baseline-rollouts/trajectories
+```
+
+### Running the full pipeline on UNC Longleaf (or any A100 cluster)
+
+5 sequential SLURM jobs:
+
+```bash
+# One-time setup on Longleaf:
+ssh longleaf.unc.edu
+cd /work/users/d/h/$USER
+git clone https://github.com/dhirengshetty14/rideshare-gym.git
+cd rideshare-gym
+module load python/3.12 cuda/12.4
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,training]"
+
+# The full pipeline:
+sbatch training/slurm/submit_baseline_eval.sbatch        # ~1 h
+sbatch training/slurm/submit_collect_rollouts.sbatch     # ~6-12 h
+sbatch training/slurm/submit_sft.sbatch                  # ~3-6 h
+sbatch training/slurm/submit_dpo.sbatch                  # ~4-8 h
+sbatch training/slurm/submit_grpo.sbatch                 # ~24-48 h
+```
+
+Total wall-clock: ~3-4 days. Final job emits `analysis/training_curves.png` showing per-task success rate at each stage.
+
+### Training stack
+
+- **Framework:** [TRL (HuggingFace)](https://github.com/huggingface/trl) — production-grade, native `SFTTrainer` / `DPOTrainer` / `GRPOTrainer`
+- **Model:** [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) — native Hermes-style tool-calling, fits comfortably on A100 80 GB
+- **Hardware:** 1× A100 80 GB for SFT/DPO; 2× A100 for GRPO
+- **Adapters:** LoRA / QLoRA via [PEFT](https://github.com/huggingface/peft)
+- **Tracking:** [Weights & Biases](https://wandb.ai/) for training curves; periodic gym-eval callback logs success rate every save_steps
+
+### Detailed runbook
+
+See **[training/README.md](training/README.md)** for the full design walkthrough and **[training/slurm/README.md](training/slurm/README.md)** for the Longleaf-specific runbook (module loads, scratch-space conventions, troubleshooting).
+
+---
+
 ## Quick start
 
 ### Install
@@ -380,13 +490,13 @@ source .venv/Scripts/activate  # Git Bash / Linux / Mac
 pip install -e ".[dev]"
 ```
 
-### Run all 57 tests (no API key needed)
+### Run all 64 tests (no API key, no GPU needed)
 
 ```bash
 pytest tests/ -q
 ```
 
-You should see `57 passed in ~4s`.
+You should see `64 passed in ~4s`. (57 cover the eval gym; 7 cover the training data converters.)
 
 ### Run the gold oracle on every task
 
@@ -505,11 +615,28 @@ rideshare-gym/
 │   └── list_models.py                        # introspect any /v1/models endpoint
 ├── ui/
 │   └── app.py                                # Streamlit, 5 pages incl. map view
-└── tests/                                    # 57 tests, ~4s
-    ├── unit/                                 # 27 — gym scaffolding (ports from shopify-gym)
-    ├── world/                                # 18 NEW — simulator correctness
-    ├── integration/                          # 6 — mock server end-to-end
-    └── tasks/                                # 12 — gold oracle per-task
+├── tests/                                    # 64 tests, ~4s
+│   ├── unit/                                 # 27 — gym scaffolding
+│   ├── world/                                # 18 — simulator correctness
+│   ├── integration/                          # 6 — mock server end-to-end
+│   ├── tasks/                                # 12 — gold oracle per-task
+│   └── training/                             # 7 — data converters + failure miner
+├── training/                                 # ★ TRAINING PIPELINE ★
+│   ├── data/
+│   │   ├── trajectory_to_sft.py              # successful trajs → (msgs, completion)
+│   │   ├── trajectory_to_dpo.py              # success+fail → (chosen, rejected) pairs
+│   │   ├── trajectory_to_grpo.py             # task list → prompt-only dataset
+│   │   └── failure_miner.py                  # cluster failures by pattern
+│   ├── recipes/
+│   │   ├── recipe_01_sft.py                  # TRL SFTTrainer
+│   │   ├── recipe_02_dpo.py                  # TRL DPOTrainer
+│   │   └── recipe_03_grpo.py                 # TRL GRPOTrainer + verifier reward
+│   ├── reward.py                             # the verifier-as-reward function
+│   ├── eval_callback.py                      # periodic gym eval → wandb during training
+│   └── slurm/                                # Longleaf SBATCH scripts
+└── analysis/                                 # ★ ANALYSIS TOOLS ★
+    ├── before_after_curves.py                # baseline → SFT → DPO → GRPO chart
+    └── failure_dashboard.py                  # Streamlit failure-cluster viewer
 ```
 
 ---
@@ -633,26 +760,15 @@ The 2 fail-with-half-credit tasks are intentional benchmark headroom — even th
 
 ---
 
-## How this could be used to actually train a model
-
-The trajectory format is directly consumable by training pipelines:
-
-1. **Supervised fine-tuning (SFT).** Take all trajectories where `success == True`. For each step, the prompt is the message history; the target is the action that was taken. Fine-tune a smaller model (Llama 3.3 8B, Haiku) to imitate. Cheap path to a specialist.
-2. **Direct preference optimisation (DPO).** Pair a successful trajectory with a failed one on the same task + seed. The model learns to prefer the successful action sequence.
-3. **Reward modelling + PPO.** Train a separate model to predict the verifier's reward from observation + action. Use it in a PPO loop to update the agent's policy. The simulator's tick-by-tick determinism (under fixed seed) makes this tractable.
-4. **Inference-time scaling.** Run N rollouts per task, take the best one by reward.
-
-The gym does double duty: **benchmark** (rank agents) AND **data factory** (produce training data for the next agent).
-
----
-
 ## What's not built (post-MVP)
 
+- **Validated empirical results from the training pipeline.** The pipeline is built and unit-tested, but the actual baseline → SFT → DPO → GRPO improvement curve needs to be run on a GPU cluster to be reported. Do this on Longleaf (see `training/slurm/README.md`).
 - Toxiproxy network-level chaos in the eval harness (Docker compose is wired but middleware-level perturbations cover the same failure modes in-process).
 - More tasks. The plan calls for ~30 tasks total via combinatorial perturbation expansion of the 12 base tasks (mechanical to add).
 - Real OSM city graph (osmnx). The 6-zone stylized city is sufficient for these tasks; OSM would add ~200MB of dep + city cache and is a separate project.
 - WebSocket streaming of world events to the agent (currently the agent polls via list_pending_requests / tick).
 - A dedicated agent persona for "driver-side" or "rider-side" sub-tasks (currently we have a unified "platform brain" persona).
+- **Layer 2: Photoshop gym** — the entire `training/` module here is gym-agnostic, so the same recipes transplant to a future Photoshop gym (or any tool-calling domain). Only the verifier needs to change.
 
 ---
 
