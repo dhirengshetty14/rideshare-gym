@@ -41,6 +41,15 @@ runs/
 *.db
 *.sqlite
 
+# Training outputs / checkpoints / wandb
+checkpoints/
+wandb/
+training_data/
+analysis/test_*.*
+analysis/training_*.json
+analysis/training_*.png
+analysis/baseline_failure_report.json
+
 # Streamlit
 .streamlit/secrets.toml
 
