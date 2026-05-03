@@ -27,27 +27,64 @@ source ~/.bashrc
 mkdir -p logs runs training_data analysis
 ```
 
-## The pipeline
+## The pipeline (with statistics)
+
+There are two ways to run it:
+
+**A. Hands-off chain** (recommended) — one submission, jobs chain via SLURM dependencies:
 
 ```bash
-# 0. Baseline measurement — what's our starting point?
-sbatch training/slurm/submit_baseline_eval.sbatch
-
-# 1. Collect ~600 trajectories at temperature 0.7 (more passes = more data).
-sbatch training/slurm/submit_collect_rollouts.sbatch
-
-# 2. Recipe 1 — SFT.
-sbatch training/slurm/submit_sft.sbatch
-
-# 3. Recipe 2 — DPO from SFT checkpoint.
-sbatch training/slurm/submit_dpo.sbatch
-
-# 4. Recipe 3 — GRPO from DPO checkpoint (longest job).
-sbatch training/slurm/submit_grpo.sbatch
+bash training/slurm/submit_full_pipeline_with_stats.sbatch
 ```
 
-The GRPO script also produces the final comparison chart at
-`analysis/training_curves.png`.
+**B. Manual** — submit each phase yourself in order:
+
+```bash
+# 0. Baseline stats (50 seeds × 12 tasks = 600 episodes, paired with later runs).
+sbatch training/slurm/submit_baseline_stats.sbatch
+
+# 1. Collect ~600 rollouts at temp 0.7 + build SFT/DPO/GRPO datasets.
+sbatch training/slurm/submit_collect_rollouts.sbatch
+
+# 2. SFT.
+sbatch training/slurm/submit_sft.sbatch
+
+# 3. Stats on SFT checkpoint (paired against baseline).
+TRAINED_CKPT=/work/users/d/h/$USER/checkpoints/sft_v1 STAGE_NAME=sft \
+    sbatch training/slurm/submit_trained_stats.sbatch
+
+# 4. DPO from SFT checkpoint.
+sbatch training/slurm/submit_dpo.sbatch
+
+# 5. Stats on DPO checkpoint.
+TRAINED_CKPT=/work/users/d/h/$USER/checkpoints/dpo_v1 STAGE_NAME=dpo \
+    sbatch training/slurm/submit_trained_stats.sbatch
+
+# 6. GRPO from DPO checkpoint.
+sbatch training/slurm/submit_grpo.sbatch
+
+# 7. Stats on the final GRPO checkpoint + cross-stage comparison report.
+TRAINED_CKPT=/work/users/d/h/$USER/checkpoints/grpo_v1 STAGE_NAME=grpo \
+    sbatch training/slurm/submit_trained_stats.sbatch
+```
+
+The final stats job produces:
+- `analysis/baseline_stats.json`, `analysis/sft_stats.json`, `analysis/dpo_stats.json`, `analysis/grpo_stats.json`
+- `analysis/comparison_baseline_vs_grpo.json` — paired McNemar, Cohen's h, per-task deltas with bootstrap CIs
+- `analysis/report_baseline_vs_grpo.md` — **the deliverable Markdown report for the mentor**
+
+## The statistical comparison
+
+What makes the before/after comparison rigorous (not just "70% vs 85%"):
+
+- **Paired** McNemar's test on the same `(task, seed)` pairs (not pooled proportions)
+- **Bootstrap 95% CIs** on every delta
+- **Cohen's h** effect size on success-rate differences (negligible / small / medium / large)
+- **Paired Wilcoxon signed-rank** test on per-episode reward deltas
+- **Failure-mode shift** — chi-square on the goal_incomplete / wrong_tool / wrong_args / crashed distribution before vs after
+- **Tool-call quality** — wrong_args_rate and unknown_tool_rate before vs after, isolating whether training fixed format errors specifically
+
+See `analysis/STATS_PLAN.md` for the full statistical rationale.
 
 ## Useful flags
 
