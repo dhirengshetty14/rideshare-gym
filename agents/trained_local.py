@@ -143,9 +143,40 @@ class TrainedLocalAgent:
         elif load_in_8bit:
             load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.checkpoint_path, **load_kwargs,
-        )
+        # Detect whether checkpoint_path is a LoRA adapter directory or a full
+        # model. LoRA dirs have adapter_config.json but no full model weights —
+        # they need the base model loaded first, then the adapter applied on top
+        # via peft.PeftModel. Full-FT checkpoints can be loaded directly.
+        adapter_config_path = Path(self.checkpoint_path) / "adapter_config.json"
+        is_lora_adapter = adapter_config_path.exists()
+
+        if is_lora_adapter:
+            with open(adapter_config_path, encoding="utf-8") as f:
+                adapter_config = json.load(f)
+            base_model_name = adapter_config.get(
+                "base_model_name_or_path", self.base_model,
+            )
+            if self.verbose:
+                print(f"[trained_local] Loading LoRA adapter from "
+                      f"{self.checkpoint_path} on base {base_model_name}")
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model_name, **load_kwargs,
+            )
+            try:
+                from peft import PeftModel
+            except ImportError as e:
+                raise RuntimeError(
+                    "peft is required to load LoRA-adapter checkpoints. "
+                    "Install with: pip install -e '.[training]'"
+                ) from e
+            self.model = PeftModel.from_pretrained(base, self.checkpoint_path)
+        else:
+            if self.verbose:
+                print(f"[trained_local] Loading full model from "
+                      f"{self.checkpoint_path}")
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.checkpoint_path, **load_kwargs,
+            )
         self.model.eval()
         self._torch = torch
 
