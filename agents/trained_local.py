@@ -257,17 +257,29 @@ class TrainedLocalAgent:
                 )
 
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+            # transformers raises if do_sample=True with temperature=0. Fall
+            # back to greedy decoding when the user asked for temperature=0
+            # (deterministic eval).
+            _do_sample = bool(self.do_sample and (self.temperature or 0) > 0)
+            _temperature = self.temperature if (self.temperature or 0) > 0 else 1.0
             try:
                 with self._torch.inference_mode():
                     out_ids = self.model.generate(
                         **inputs,
                         max_new_tokens=self.max_new_tokens,
-                        do_sample=self.do_sample,
-                        temperature=self.temperature,
+                        do_sample=_do_sample,
+                        temperature=_temperature,
                         top_p=0.9,
                         pad_token_id=self.tokenizer.pad_token_id,
                     )
             except Exception as e:
+                # Always print the traceback to stderr so silent crashes
+                # don't waste a 12h eval run. The trajectory still records
+                # error_category="crashed" for downstream analysis.
+                import sys, traceback
+                print(f"[trained_local] generate() raised on step {step}: "
+                       f"{type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                traceback.print_exc(file=sys.stderr)
                 error_category = "crashed"
                 if on_event:
                     on_event({"event": "error", "step": step,
