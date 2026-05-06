@@ -1,9 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=rideshare-baseline-stats
-#SBATCH --partition=a100-gpu
-#SBATCH --gres=gpu:a100:1
+#SBATCH --partition=l40-gpu
+#SBATCH --qos=gpu_access
+#SBATCH --gres=gpu:nvidia_l40s:1
 #SBATCH --mem=64G
-#SBATCH --time=08:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output=logs/baseline-stats-%j.out
 #SBATCH --error=logs/baseline-stats-%j.err
 

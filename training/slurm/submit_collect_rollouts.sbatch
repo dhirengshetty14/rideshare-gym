@@ -1,9 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=rideshare-collect-rollouts
-#SBATCH --partition=a100-gpu
-#SBATCH --gres=gpu:a100:1
+#SBATCH --partition=l40-gpu
+#SBATCH --qos=gpu_access
+#SBATCH --gres=gpu:nvidia_l40s:1
 #SBATCH --mem=64G
-#SBATCH --time=12:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output=logs/collect-%j.out
 #SBATCH --error=logs/collect-%j.err
 

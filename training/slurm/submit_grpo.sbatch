@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=rideshare-grpo
 #SBATCH --partition=a100-gpu
-#SBATCH --gres=gpu:a100:2
-#SBATCH --mem=160G
+#SBATCH --qos=gpu_access
+#SBATCH --gres=gpu:nvidia_a100-pcie-40gb:1
+#SBATCH --mem=120G
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/grpo-%j.out
 #SBATCH --error=logs/grpo-%j.err

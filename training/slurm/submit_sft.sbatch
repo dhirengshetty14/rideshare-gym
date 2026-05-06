@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=rideshare-sft
-#SBATCH --partition=a100-gpu
-#SBATCH --gres=gpu:a100:1
+#SBATCH --partition=l40-gpu
+#SBATCH --qos=gpu_access
+#SBATCH --gres=gpu:nvidia_l40s:1
 #SBATCH --mem=80G
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/sft-%j.out
