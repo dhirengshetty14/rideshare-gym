@@ -27,11 +27,12 @@ python -m training.recipes.recipe_01_sft \
     --dataset training_data/sft_v1.jsonl \
     --output "${CKPT_DIR}" \
     --use-lora \
+    --load-in-4bit \
     --epochs 3 \
-    --batch-size 2 \
-    --grad-accum 4 \
+    --batch-size 1 \
+    --grad-accum 8 \
     --learning-rate 1e-4 \
-    --max-seq-length 4096
+    --max-seq-length 2048
 
 # Quick eval the SFT checkpoint.
 python eval/run.py \

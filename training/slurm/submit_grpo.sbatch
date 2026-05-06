@@ -29,11 +29,13 @@ python -m training.recipes.recipe_03_grpo \
     --prompts-dataset training_data/grpo_prompts.jsonl \
     --output "${CKPT_DIR}" \
     --use-lora \
-    --num-generations 8 \
+    --load-in-4bit \
+    --num-generations 4 \
     --batch-size 1 \
     --grad-accum 8 \
     --learning-rate 3e-6 \
     --kl-coef 0.001 \
+    --max-prompt-length 1536 \
     --max-completion-length 512 \
     --temperature 1.0 \
     --epochs 1

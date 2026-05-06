@@ -28,7 +28,12 @@ python -m training.recipes.recipe_02_dpo \
     --dataset training_data/dpo_v1.jsonl \
     --output "${CKPT_DIR}" \
     --use-lora \
+    --load-in-4bit \
     --epochs 1 \
+    --batch-size 1 \
+    --grad-accum 8 \
+    --max-length 2048 \
+    --max-prompt-length 1536 \
     --learning-rate 5e-6 \
     --beta 0.1
 
