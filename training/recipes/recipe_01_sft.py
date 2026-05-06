@@ -99,24 +99,8 @@ def main() -> None:
     formatted = [format_example(ex, tokenizer) for ex in raw]
     dataset = Dataset.from_list(formatted)
 
-    sft_config = SFTConfig(
-        output_dir=str(args.output),
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
-        learning_rate=args.learning_rate,
-        max_seq_length=args.max_seq_length,
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        save_strategy="steps",
-        seed=args.seed,
-        bf16=torch.cuda.is_available(),
-        report_to=("wandb" if os.environ.get("WANDB_API_KEY") else "none"),
-        run_name=args.wandb_run_name or args.output.name,
-        gradient_checkpointing=True,
-        warmup_ratio=0.05,
-    )
-
+    # Build model loading kwargs FIRST. In newer TRL (>=0.12) these go on
+    # SFTConfig (via model_init_kwargs), not on SFTTrainer.
     model_kwargs: dict[str, Any] = {
         "torch_dtype": torch.bfloat16,
     }
@@ -128,6 +112,25 @@ def main() -> None:
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
+
+    sft_config = SFTConfig(
+        output_dir=str(args.output),
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        learning_rate=args.learning_rate,
+        max_length=args.max_seq_length,
+        logging_steps=args.logging_steps,
+        save_steps=args.save_steps,
+        save_strategy="steps",
+        seed=args.seed,
+        bf16=torch.cuda.is_available(),
+        report_to=("wandb" if os.environ.get("WANDB_API_KEY") else "none"),
+        run_name=args.wandb_run_name or args.output.name,
+        gradient_checkpointing=True,
+        warmup_ratio=0.05,
+        model_init_kwargs=model_kwargs,
+    )
 
     peft_config = None
     if args.use_lora:
@@ -144,7 +147,6 @@ def main() -> None:
         args=sft_config,
         train_dataset=dataset,
         peft_config=peft_config,
-        model_init_kwargs=model_kwargs,
         tokenizer=tokenizer,
     )
     print("Starting SFT ...")

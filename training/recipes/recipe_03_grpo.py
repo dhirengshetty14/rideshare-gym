@@ -104,6 +104,17 @@ def main() -> None:
         })
     dataset = Dataset.from_list(rendered)
 
+    # Build model loading kwargs FIRST. In newer TRL these go on
+    # GRPOConfig (via model_init_kwargs), not on GRPOTrainer.
+    model_kwargs: dict[str, Any] = {"torch_dtype": torch.bfloat16}
+    if args.load_in_4bit:
+        from transformers import BitsAndBytesConfig
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+
     grpo_config = GRPOConfig(
         output_dir=str(args.output),
         num_train_epochs=args.epochs,
@@ -123,16 +134,8 @@ def main() -> None:
         run_name=args.wandb_run_name or args.output.name,
         gradient_checkpointing=True,
         warmup_ratio=0.05,
+        model_init_kwargs=model_kwargs,
     )
-
-    model_kwargs: dict[str, Any] = {"torch_dtype": torch.bfloat16}
-    if args.load_in_4bit:
-        from transformers import BitsAndBytesConfig
-        model_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
 
     peft_config = None
     if args.use_lora:
@@ -150,7 +153,6 @@ def main() -> None:
         args=grpo_config,
         train_dataset=dataset,
         peft_config=peft_config,
-        model_init_kwargs=model_kwargs,
         tokenizer=tokenizer,
     )
     print("Starting GRPO ...")
