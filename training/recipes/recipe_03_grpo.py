@@ -153,7 +153,7 @@ def main() -> None:
         args=grpo_config,
         train_dataset=dataset,
         peft_config=peft_config,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
     print("Starting GRPO ...")
     trainer.train()
